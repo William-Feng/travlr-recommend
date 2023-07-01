@@ -2,12 +2,7 @@ import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 import requests
 import json
-import torch
-import torch.nn as nn
-import torchvision.transforms as transforms
-from torchvision import models
-from torch.utils.data import DataLoader, Dataset
-from PIL import Image
+
 
 '''
 This script is: 
@@ -30,16 +25,7 @@ def get_preferences():
         print("Error: Failed to retrieve user preferences.")
         return None
 
-# def get_photos():
-#     url = "http://localhost:8000/photos"
-#     response = requests.get(url)
-#     print(response)
-#     if response.status_code == 200:
-#         preferences = response.json()
-#         return preferences
-#     else:
-#         print("Error: Failed to retrieve user preferences.")
-#         return None
+
 
 
 def data_ingestion():
@@ -73,48 +59,6 @@ def get_userid():
     userid = '4c6376e4-a587-4ce7-b588-6a94ab103685'
     return userid
 
-class FineTunedModel(nn.Module):
-    def __init__(self, num_classes):
-        super(FineTunedModel, self).__init__()
-        self.resnet = models.resnet18(pretrained=True)
-        for param in self.resnet.parameters():
-            param.requires_grad = False
-        self.resnet.fc = nn.Sequential(
-            nn.Linear(self.resnet.fc.in_features, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),  # Dropout layer with 50% probability
-            nn.Linear(512, num_classes)
-        )
-
-    def forward(self, x):
-        x = self.resnet(x)
-        return x
-
-
-def image_classification(num_classes=NUM_CLASSES):
-    # Call PyTorch Model
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
-                             0.229, 0.224, 0.225])
-    ])
-
-    model = FineTunedModel(num_classes)
-    model.load_state_dict(torch.load('model_learning_curve.pth'))
-
-    image = Image.open('./test/lunar_park.jpg').convert('RGB')
-    image = transform(image)
-    image = image.unsqueeze(0)
-
-    # Make predictions
-    with torch.no_grad():
-        output = model(image)
-        probabilities = torch.sigmoid(output)
-        predicted_labels = (probabilities >= 0.35).squeeze().tolist()
-
-    return predicted_labels
-
 
 def run_user_recommendation_system(user_id):
     data = get_preferences()
@@ -135,4 +79,16 @@ def run_user_recommendation_system(user_id):
         result.append(person)
         counter += 1
         
+
+    url = "http://127.0.0.1:4000/connections"
+    
+    data = {
+        "user_id": user_id,
+        "connection_ids": result
+    }
+    
+    print(json.dumps(data))
+    
+    response = requests.post(url, json=json.dumps(data))
+    
     return result

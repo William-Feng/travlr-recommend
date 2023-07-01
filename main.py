@@ -15,6 +15,6 @@ def read_root():
 def get_user_preferences(id):
     return run_user_recommendation_system(id)
     
-@app.get("/locations/{id}")
-def get_location_preferences(id):
-    return run_location_recommendation_system(id)
+@app.get("/locations/{user_id}")
+def get_location_preferences(user_id):
+    return run_location_recommendation_system(user_id)

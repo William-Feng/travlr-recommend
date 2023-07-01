@@ -2,6 +2,13 @@ import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 import json
 import requests
+import torch.nn as nn
+import torchvision.transforms as transforms
+from torchvision import models
+from torch.utils.data import DataLoader, Dataset
+from PIL import Image
+import torch
+from io import BytesIO
 
 NUM_CLASSES = 11
 
@@ -15,6 +22,15 @@ def get_preferences():
         print("Error: Failed to retrieve the locations.")
         return None
 
+def get_photos():
+    url = "http://localhost:4000/photos"
+    response = requests.get(url)
+    if response.status_code == 200:
+        preferences = response.json()
+        return preferences
+    else:
+        print("Error: Failed to retrieve user preferences.")
+        return None
 
 def data_ingestion():
     data = {
@@ -41,6 +57,11 @@ def data_to_json(data):
 class UserBasedCollaborativeFiltering:
     def __init__(self, json_data):
         self.data = pd.read_json(json_data)
+        
+        print("HELLO")
+        print(self.data)
+        print("HELLO")
+        
         self.data = self.data.set_index("id")
         self.user_similarity = cosine_similarity(self.data)
 
@@ -54,25 +75,148 @@ class UserBasedCollaborativeFiltering:
         return similar_users
 
 
-def run_location_recommendation_system(location_id):
+class FineTunedModel(nn.Module):
+    def __init__(self, num_classes=NUM_CLASSES):
+        super(FineTunedModel, self).__init__()
+        self.resnet = models.resnet18(pretrained=True)
+        for param in self.resnet.parameters():
+            param.requires_grad = False
+        self.resnet.fc = nn.Sequential(
+            nn.Linear(self.resnet.fc.in_features, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),  # Dropout layer with 50% probability
+            nn.Linear(512, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.resnet(x)
+        return x
+
+
+def load_image_from_url(url):
+    response = requests.get(url)
+    img = Image.open(BytesIO(response.content))
+    return img
+
+def image_classification(photo, num_classes=NUM_CLASSES):
+    # Call PyTorch Model
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                             0.229, 0.224, 0.225])
+    ])
+
+    model = FineTunedModel(num_classes)
+    model.load_state_dict(torch.load('models/model_learning_curve.pth'))
+
+    # image = Image.open('models/test/lunar_park.jpg').convert('RGB')
+    image = load_image_from_url(photo).convert('RGB')
+    image = transform(image)
+    image = image.unsqueeze(0)
+
+    # Make predictions
+    with torch.no_grad():
+        output = model(image)
+        probabilities = torch.sigmoid(output)
+        predicted_labels = (probabilities >= 0.35).squeeze().tolist()
+        
+    print(predicted_labels)
+
+    return predicted_labels
+
+def run_location_recommendation_system(user_id):
     data = get_preferences()
     data = json.dumps(data)
     data = pd.read_json(data)
     data = data.drop(["name", "photo_url", "coordinates"], axis=1)
     json_data = data.to_json()
+    
+    url = f"http://127.0.0.1:4000/photos/user/{user_id}"
+    
+    response = requests.get(url)
+    
+    agg = []
+    
+    for res in response:
+        stats = image_classification(photo=res["url"])
+        agg.append(list(map(int, stats)))
+        
+    averages = [sum(col) / len(col) for col in zip(*agg)]
+        
+    new_row = pd.DataFrame([averages]).T
+    
+    print(new_row)
 
-    cf = UserBasedCollaborativeFiltering(json_data)
-    print("HELLO")
-    print(location_id)
-    print("HELLO")
-    similar_locations = cf.get_similar_locations(id=location_id, top_n=10)
+    # Add the new row to the dataframe
+    df = pd.concat([data, new_row], axis=1)
+    
+    location_url = "http://127.0.0.1:4000/locations"
+    locations_response = requests.get(location_url)
+    
+    for location in locations_response:
+        del location["name"]
+        del location["photo_url"]
+        del location["coordinates"]
+        
+    print(location)
+    
+    
+    # for res in response:
+    #     stats = image_classification(photo=res["url"])
+    #     agg.append(list(map(int, stats)))
+    
+    
+    # print(df)
+        
+    # url = "http://127.0.0.1:4000/locations"
+    
+    # data = {
+    #     "user_id": user_id,
+    #     "recommendation_id": averages
+    # }
+    
+    # json_data = df.to_json()
+    
+    
+    # print(json.dumps(data))
+    
+    # response = requests.post(url, json=json.dumps(data))
+
+    # cf = UserBasedCollaborativeFiltering(json_data)
+    # similar_locations = cf.get_similar_locations(id=location_id, top_n=10)
 
     # Return the most similar people in an array (from most similar to least similar)
-    result = []
-    counter = 1
-    for location in similar_locations:
-        print(f"The location that is {counter} similar to {location_id} has location_id: {location}")
-        result.append(location)
-        counter += 1
+    # result = []
+    # counter = 1
+    # for location in similar_locations:
+    #     print(f"The location that is {counter} similar to {location_id} has location_id: {location}")
+    #     result.append(location)
+    #     counter += 1
         
-    return result
+    # url = "http://127.0.0.1:4000/recommendations"
+    
+    # data = {
+    #     "user_id": user_id,
+    #     "location_id": result
+    # }
+    
+    # print(json.dumps(data))
+    
+    # response = requests.post(url, json=json.dumps(data))
+        
+        
+    # return result
+    
+    
+# model = FineTunedModel(NUM_CLASSES)
+# model.load_state_dict(torch.load('model_learning_curve.pth'))
+# image = Image.open("image.jpg").convert('RGB')
+# image = transform(image)
+# image = image.unsqueeze(0)  # Add an extra dimension for batch size
+
+# # Make predictions
+# with torch.no_grad():
+#     output = model(image)
+#     probabilities = torch.sigmoid(output)
+#     predicted_labels = (probabilities >= 0.4).squeeze().tolist()
